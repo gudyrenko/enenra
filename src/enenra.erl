@@ -29,6 +29,7 @@
 -export([list_buckets/1, get_bucket/2, insert_bucket/2, update_bucket/3, delete_bucket/2]).
 -export([list_objects/2, get_object/3, get_object_contents/3, update_object/4, delete_object/3]).
 -export([upload_file/3, upload_data/3, download_object/4]).
+-export([create_object/5]).
 
 % @doc
 %
@@ -324,3 +325,16 @@ validate_bucket_name_chars(Name) ->
         nomatch -> {error, invalid_chars};
         _R -> ok
     end.
+
+% @doc
+%
+% Creates an object used for requests to Google Cloud Storage
+
+create_object(Name, Bucket, ContentType, Md5Hash, Size) ->
+    #object{
+     name = Name,
+     bucket = Bucket,
+     contentType = ContentType,
+     md5Hash = Md5Hash,
+     size = Size
+    }.
