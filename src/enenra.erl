@@ -332,6 +332,10 @@ validate_bucket_name_chars(Name) ->
 
 create_object(Name, Bucket, ContentType, Md5Hash, Size) ->
     #object{
+     id = <<"">>,
+     timeCreated = <<"">>,
+     updated = <<"">>,
+     storageClass = <<"">>,
      name = Name,
      bucket = Bucket,
      contentType = ContentType,
