@@ -132,7 +132,7 @@ msg_to_fun(_) ->
 -spec list_buckets(credentials(), access_token()) -> {ok, [bucket()]} | {error, term()}.
 list_buckets(Credentials, Token) ->
     Project = Credentials#credentials.project_id,
-    Url = hackney_url:make_url(?BASE_URL, <<"">>, [{"project", Project}]),
+    Url = hackney_url:make_url(?BASE_URL, <<"">>, [{<<"project">>, Project}]),
     ReqHeaders = add_auth_header(Token, []),
     {ok, Status, Headers, Client} = hackney:request(get, Url, ReqHeaders),
     case decode_response(Status, Headers, Client) of
@@ -165,7 +165,7 @@ get_bucket(Name, Token) ->
 -spec insert_bucket(bucket(), credentials(), access_token()) -> {ok, bucket()} | {error, term()}.
 insert_bucket(Bucket, Credentials, Token) ->
     Project = Credentials#credentials.project_id,
-    Url = hackney_url:make_url(?BASE_URL, <<"">>, [{"project", Project}]),
+    Url = hackney_url:make_url(?BASE_URL, <<"">>, [{<<"project">>, Project}]),
     ReqHeaders = add_auth_header(Token, [
         {<<"Content-Type">>, <<"application/json">>}
     ]),
@@ -254,17 +254,13 @@ list_objects(BucketName, Token) ->
 upload_object(Object, RequestBody, Token) ->
     BucketName = Object#object.bucket,
     Url = hackney_url:make_url(
-        ?UPLOAD_URL, <<BucketName/binary, "/o">>, [{"uploadType", "resumable"}]),
+        ?UPLOAD_URL, <<BucketName/binary, "/o">>, [{<<"uploadType">>, <<"resumable">>}]),
     ReqHeaders = add_auth_header(Token, [
         {<<"Content-Type">>, <<"application/json; charset=UTF-8">>},
         {<<"X-Upload-Content-Type">>, Object#object.contentType},
         {<<"X-Upload-Content-Length">>, Object#object.size}
     ]),
-    ReqBody = binary_to_list(jiffy:encode({[
-        {<<"name">>, Object#object.name},
-        % include the md5 so GCP can verify the upload was successful
-        {<<"md5Hash">>, Object#object.md5Hash}
-    ]})),
+    ReqBody = binary_to_list(jiffy:encode(upload_object_body(Object))),
     {ok, Status, Headers, Client} = hackney:request(post, Url, ReqHeaders, ReqBody),
     case Status of
         200 ->
@@ -274,6 +270,18 @@ upload_object(Object, RequestBody, Token) ->
             do_upload(UploadUrl, Object, RequestBody, Token);
         _ -> decode_response(Status, Headers, Client)
     end.
+
+% @doc
+%
+% Creates the body for an object upload based on the object record
+%
+-spec upload_object_body(object()) -> tuple().
+upload_object_body(#object{name = Name, md5Hash = Hash, metadata = Metadata}) ->
+    {add_metadata(Metadata, [
+        {<<"name">>, Name},
+        % include the md5 so GCP can verify the upload was successful
+        {<<"md5Hash">>, Hash}
+    ])}.
 
 % @doc
 %
@@ -310,11 +318,11 @@ do_upload(Url, Object, RequestBody, Token) ->
 %
 % Retrieve the object and save to the named file.
 %
--spec download_object(binary(), binary(), string(), credentials()) -> ok | {error, term()}.
+-spec download_object(binary(), binary(), string(), access_token()) -> {ok, term()} | {error, term()}.
 download_object(BucketName, ObjectName, Filename, Token) ->
     ON = hackney_url:urlencode(ObjectName),
     UrlPath = <<BucketName/binary, "/o/", ON/binary>>,
-    Url = hackney_url:make_url(?BASE_URL, UrlPath, [{"alt", "media"}]),
+    Url = hackney_url:make_url(?BASE_URL, UrlPath, [{<<"alt">>, <<"media">>}]),
     ReqHeaders = add_auth_header(Token, []),
     {ok, Status, Headers, Client} = hackney:request(get, Url, ReqHeaders),
     case Status of
@@ -344,7 +352,7 @@ stream_to_file(FileHandle, Client) ->
 %
 % Retrieve the properties of the named object in the named bucket.
 %
--spec get_object(binary(), binary(), credentials()) -> {ok, object()} | {error, term()}.
+-spec get_object(binary(), binary(), access_token()) -> {ok, object()} | {error, term()}.
 get_object(BucketName, ObjectName, Token) ->
     ON = hackney_url:urlencode(ObjectName),
     Url = <<?BASE_URL/binary, BucketName/binary, "/o/", ON/binary>>,
@@ -358,11 +366,11 @@ get_object(BucketName, ObjectName, Token) ->
 %
 % Retrieve the contents of the named object in the named bucket.
 %
--spec get_object_contents(binary(), binary(), credentials()) -> {ok, object()} | {error, term()}.
+-spec get_object_contents(binary(), binary(), access_token()) -> {ok, object()} | {error, term()}.
 get_object_contents(BucketName, ObjectName, Token) ->
     ON = hackney_url:urlencode(ObjectName),
     UrlPath = <<BucketName/binary, "/o/", ON/binary>>,
-    Url = hackney_url:make_url(?BASE_URL, UrlPath, [{"alt", "media"}]),
+    Url = hackney_url:make_url(?BASE_URL, UrlPath, [{<<"alt">>, <<"media">>}]),
     ReqHeaders = add_auth_header(Token, []),
     {ok, Status, Headers, Client} = hackney:request(get, Url, ReqHeaders),
     case Status of
@@ -382,7 +390,7 @@ stream_to_binary(Client, Acc) ->
 %
 % Delete the named object in the named bucket.
 %
--spec delete_object(binary(), binary(), credentials()) -> ok | {error, term()}.
+-spec delete_object(binary(), binary(), access_token()) -> ok | {error, term()}.
 delete_object(BucketName, ObjectName, Token) ->
     ON = hackney_url:urlencode(ObjectName),
     Url = <<?BASE_URL/binary, BucketName/binary, "/o/", ON/binary>>,
@@ -426,7 +434,8 @@ make_object(PropList) ->
         updated=proplists:get_value(<<"updated">>, PropList),
         storageClass=proplists:get_value(<<"storageClass">>, PropList),
         size=proplists:get_value(<<"size">>, PropList),
-        md5Hash=proplists:get_value(<<"md5Hash">>, PropList)
+        md5Hash=proplists:get_value(<<"md5Hash">>, PropList),
+        metadata=add_metadata(PropList, [])
     }.
 
 % @doc
@@ -551,3 +560,30 @@ compute_signature(PemKeyBin, Msg) ->
     [PemKeyData] = public_key:pem_decode(PemKeyBin),
     PemKey = public_key:pem_entry_decode(PemKeyData),
     base64:encode(public_key:sign(Msg, sha256, PemKey)).
+
+% @doc
+%
+% Adds metadata values if any. Unrecognized values are ignored.
+%
+% Names taken from:
+%    https://cloud.google.com/storage/docs/json_api/v1/objects#resource-representations
+%
+-spec add_metadata(list(), list()) -> list().
+add_metadata([], List) ->
+    List;
+add_metadata([{<<"cacheControl">>, _V} = M | T], List) ->
+    add_metadata(T, [M | List]);
+add_metadata([{<<"contentDisposition">>, _V} = M | T], List) ->
+    add_metadata(T, [M | List]);
+add_metadata([{<<"contentEncoding">>, _V} = M | T], List) ->
+    add_metadata(T, [M | List]);
+add_metadata([{<<"contentLanguage">>, _V} = M | T], List) ->
+    add_metadata(T, [M | List]);
+add_metadata([{<<"contentType">>, _V} = M | T], List) ->
+    add_metadata(T, [M | List]);
+add_metadata([{<<"customTime">>, _V} = M | T], List) ->
+    add_metadata(T, [M | List]);
+add_metadata([{<<"metadata">>, _V} = M | T], List) ->
+    add_metadata(T, [M | List]);
+add_metadata([_H | T], List) ->
+    add_metadata(T, List).

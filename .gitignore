@@ -3,6 +3,7 @@
 *.plt
 *.swo
 *.swp
+.emacs*
 .erlang.cookie
 .eunit
 .rebar3

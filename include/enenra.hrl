@@ -62,7 +62,8 @@
     updated :: binary(),
     storageClass :: binary(),
     size :: integer(),
-    md5Hash :: binary()
+    md5Hash :: binary(),
+    metadata = [] :: list()
 }).
 -type object() :: #object{
     id :: binary(),
@@ -73,7 +74,8 @@
     updated :: binary(),
     storageClass :: binary(),
     size :: integer(),
-    md5Hash :: binary()
+    md5Hash :: binary(),
+    metadata :: list()
 }.
 -export_type([object/0]).
 
