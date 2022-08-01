@@ -169,11 +169,11 @@ insert_bucket(Bucket, Credentials, Token) ->
     ReqHeaders = add_auth_header(Token, [
         {<<"Content-Type">>, <<"application/json">>}
     ]),
-    ReqBody = binary_to_list(jiffy:encode({[
+    ReqBody = binary_to_list(jsx:encode([
         {<<"name">>, Bucket#bucket.name},
         {<<"location">>, Bucket#bucket.location},
         {<<"storageClass">>, Bucket#bucket.storageClass}
-    ]})),
+    ])),
     {ok, Status, Headers, Client} = hackney:request(post, Url, ReqHeaders, ReqBody),
     case decode_response(Status, Headers, Client) of
         {ok, Body} -> {ok, make_bucket(Body)};
@@ -194,7 +194,7 @@ update_bucket(Name, Properties, Token) ->
     ReqHeaders = add_auth_header(Token, [
         {<<"Content-Type">>, <<"application/json">>}
     ]),
-    ReqBody = binary_to_list(jiffy:encode({Properties})),
+    ReqBody = binary_to_list(jsx:encode(Properties)),
     {ok, Status, Headers, Client} = hackney:request(patch, Url, ReqHeaders, ReqBody),
     case decode_response(Status, Headers, Client) of
         {ok, Body} -> {ok, make_bucket(Body)};
@@ -260,7 +260,7 @@ upload_object(Object, RequestBody, Token) ->
         {<<"X-Upload-Content-Type">>, Object#object.contentType},
         {<<"X-Upload-Content-Length">>, Object#object.size}
     ]),
-    ReqBody = binary_to_list(jiffy:encode(upload_object_body(Object))),
+    ReqBody = binary_to_list(jsx:encode(upload_object_body(Object))),
     {ok, Status, Headers, Client} = hackney:request(post, Url, ReqHeaders, ReqBody),
     case Status of
         200 ->
@@ -277,11 +277,11 @@ upload_object(Object, RequestBody, Token) ->
 %
 -spec upload_object_body(object()) -> tuple().
 upload_object_body(#object{name = Name, md5Hash = Hash, metadata = Metadata}) ->
-    {add_metadata(Metadata, [
+    add_metadata(Metadata, [
         {<<"name">>, Name},
         % include the md5 so GCP can verify the upload was successful
         {<<"md5Hash">>, Hash}
-    ])}.
+    ]).
 
 % @doc
 %
@@ -412,7 +412,7 @@ update_object(BucketName, ObjectName, Properties, Token) ->
     ReqHeaders = add_auth_header(Token, [
         {<<"Content-Type">>, <<"application/json">>}
     ]),
-    ReqBody = binary_to_list(jiffy:encode({Properties})),
+    ReqBody = binary_to_list(jsx:encode(Properties)),
     {ok, Status, Headers, Client} = hackney:request(patch, Url, ReqHeaders, ReqBody),
     case decode_response(Status, Headers, Client) of
         {ok, Body} -> {ok, make_object(Body)};
@@ -481,8 +481,8 @@ decode_response(409, _Headers, Client) ->
     {error, conflict};
 decode_response(Ok, _Headers, Client) when Ok == 200; Ok == 201 ->
     {ok, Body} = hackney:body(Client),
-    try jiffy:decode(Body) of
-        {Results} -> {ok, Results}
+    try jsx:decode(Body) of
+        Results -> {ok, Results}
     catch
         Error -> Error
     end;
@@ -492,8 +492,8 @@ decode_response(204, _Headers, Client) ->
     ok;
 decode_response(_Status, _Headers, Client) ->
     {ok, Body} = hackney:body(Client),
-    try jiffy:decode(Body) of
-        {Results} -> {ok, Results}
+    try jsx:decode(Body) of
+        Results -> {ok, Results}
     catch
         Error -> Error
     end.
@@ -515,13 +515,13 @@ get_auth_token(Creds) ->
     % in 3600 seconds anyway. Who knows, maybe someday it will work, but
     % you can forget about automated testing of expiration for now.
     Timeout = application:get_env(enenra, auth_timeout, 3600),
-    ClaimSet = base64:encode(jiffy:encode({[
+    ClaimSet = base64:encode(jsx:encode([
         {<<"iss">>, Creds#credentials.client_email},
         {<<"scope">>, ?FULL_CONTROL_SCOPE},
         {<<"aud">>, ?AUD_URL},
         {<<"exp">>, Now + Timeout},
         {<<"iat">>, Now}
-    ]})),
+    ])),
     JwtPrefix = <<?JWT_HEADER/binary, ".", ClaimSet/binary>>,
     PrivateKey = Creds#credentials.private_key,
     Signature = compute_signature(PrivateKey, JwtPrefix),
