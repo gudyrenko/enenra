@@ -30,6 +30,9 @@
 -export([list_objects/2, get_object/3, get_object_contents/3, update_object/4, delete_object/3]).
 -export([upload_file/3, upload_data/3, download_object/4]).
 
+
+-export([get_google_spreadsheet/3, get_google_spreadsheet/4]).
+
 % @doc
 %
 % Load the credentials for the given file, which is assumed to be a JSON
@@ -48,6 +51,29 @@ load_credentials(Filepath) ->
         client_email=proplists:get_value(<<"client_email">>, Creds),
         client_id=proplists:get_value(<<"client_id">>, Creds)
     }}.
+
+% @doc
+%
+-spec get_google_spreadsheet(SpreadsheetId, SheetName, Credentials) -> {ok, Object} | {error, Reason} when
+    SpreadsheetId :: binary(),
+    SheetName :: binary(),
+    Credentials :: credentials(),
+    Object :: object(),
+    Reason :: term().
+get_google_spreadsheet(SpreadsheetId, SheetName, Credentials) ->
+    enenra_server:call({get_google_spreadsheet, SpreadsheetId, SheetName, Credentials}).
+
+
+-spec get_google_spreadsheet(SpreadsheetId, SheetName, Ranges, Credentials) -> {ok, Object} | {error, Reason} when
+    SpreadsheetId :: binary(),
+    SheetName :: binary(),
+    Ranges :: binary(),
+    Credentials :: credentials(),
+    Object :: object(),
+    Reason :: term().
+get_google_spreadsheet(SpreadsheetId, SheetName, Ranges, Credentials) ->
+    enenra_server:call({get_google_spreadsheet, SpreadsheetId, SheetName, Ranges, Credentials}).
+
 
 % @doc
 %
