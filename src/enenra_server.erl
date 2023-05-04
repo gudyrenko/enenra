@@ -42,13 +42,13 @@ start_link() ->
 
 call(Msg) ->
     case msg_to_fun(Msg) of
-        {Credentials, Fun} ->
-            {ok, Token} = call_remote({get_token, Credentials}),
+        {Credentials, Scope, Fun} ->
+            {ok, Token} = call_remote({get_token, Credentials, Scope}),
             %% Invoke the given function with an authorization token. If the function
             case Fun(Token) of
                 {error, auth_required} ->
                     %% re-try after refreshing the token
-                    {ok, FreshToken} = call_remote({refresh_token, Credentials}),
+                    {ok, FreshToken} = call_remote({refresh_token, Credentials, Scope}),
                     Fun(FreshToken);
                 Result ->
                     Result
@@ -62,17 +62,17 @@ call(Msg) ->
 init([]) ->
     {ok, #state{}}.
 
-handle_call({refresh_token, Credentials}, _From, State) ->
-    case get_auth_token(Credentials) of
+handle_call({refresh_token, Credentials, Scope}, _From, State) ->
+    case get_auth_token(Credentials, Scope) of
       R = {ok, Token} ->
         {reply, R, State#state{token=Token}};
       Reply ->
         {reply, Reply, State#state{token=undefined}}
     end;
-handle_call({get_token, Credentials}, From, State = #state{token=undefined}) ->
+handle_call({get_token, Credentials, Scope}, From, State = #state{token=undefined}) ->
     % token is not set, just call refresh
-    handle_call({refresh_token, Credentials}, From, State);
-handle_call({get_token, _Credentials}, _From, State = #state{token=Token}) ->
+    handle_call({refresh_token, Credentials, Scope}, From, State);
+handle_call({get_token, _Credentials, _Scope}, _From, State = #state{token=Token}) ->
     {reply, {ok, Token}, State}.
 
 handle_cast(_Msg, State) ->
@@ -95,35 +95,76 @@ call_remote(Msg) ->
   gen_server:call(?MODULE, Msg, infinity).
 
 -define (CRED_FUN(FunBody),
-    { Credentials, fun(Token) -> FunBody end }
+    { Credentials, Scope, fun(Token) -> FunBody end }
 ).
-%% transform message into function callbacks
+
+msg_to_fun({get_google_spreadsheet, SpreadsheetId, SheetName, Credentials}) ->
+    Scope = <<"https://www.googleapis.com/auth/spreadsheets">>,
+    ?CRED_FUN(get_google_spreadsheet(SpreadsheetId, SheetName, Token));
+msg_to_fun({get_google_spreadsheet, SpreadsheetId, SheetName, Ranges, Credentials}) ->
+    Scope = <<"https://www.googleapis.com/auth/spreadsheets">>,
+    ?CRED_FUN(get_google_spreadsheet(SpreadsheetId, SheetName, Ranges, Token));
 msg_to_fun({list_buckets, Credentials}) ->
+    Scope = ?FULL_CONTROL_SCOPE,
     ?CRED_FUN(list_buckets(Credentials, Token));
 msg_to_fun({get_bucket, Name, Credentials}) ->
+    Scope = ?FULL_CONTROL_SCOPE,
     ?CRED_FUN(get_bucket(Name, Token));
 msg_to_fun({insert_bucket, Bucket, Credentials}) ->
+    Scope = ?FULL_CONTROL_SCOPE,
     ?CRED_FUN(insert_bucket(Bucket, Credentials, Token));
 msg_to_fun({update_bucket, Name, Properties, Credentials}) ->
+    Scope = ?FULL_CONTROL_SCOPE,
     ?CRED_FUN(update_bucket(Name, Properties, Token));
 msg_to_fun({delete_bucket, Name, Credentials}) ->
+    Scope = ?FULL_CONTROL_SCOPE,
     ?CRED_FUN(delete_bucket(Name, Token));
 msg_to_fun({list_objects, BucketName, Credentials}) ->
+    Scope = ?FULL_CONTROL_SCOPE,
     ?CRED_FUN(list_objects(BucketName, Token));
 msg_to_fun({upload_object, Object, RequestBody, Credentials}) ->
+    Scope = ?FULL_CONTROL_SCOPE,
     ?CRED_FUN(upload_object(Object, RequestBody, Token));
 msg_to_fun({download_object, BucketName, ObjectName, Filename, Credentials}) ->
+    Scope = ?FULL_CONTROL_SCOPE,
     ?CRED_FUN(download_object(BucketName, ObjectName, Filename, Token));
 msg_to_fun({get_object, BucketName, ObjectName, Credentials}) ->
+    Scope = ?FULL_CONTROL_SCOPE,
     ?CRED_FUN(get_object(BucketName, ObjectName, Token));
 msg_to_fun({get_object_contents, BucketName, ObjectName, Credentials}) ->
+    Scope = ?FULL_CONTROL_SCOPE,
     ?CRED_FUN(get_object_contents(BucketName, ObjectName, Token));
 msg_to_fun({delete_object, BucketName, ObjectName, Credentials}) ->
+    Scope = ?FULL_CONTROL_SCOPE,
     ?CRED_FUN(delete_object(BucketName, ObjectName, Token));
 msg_to_fun({update_object, BucketName, ObjectName, Properties, Credentials}) ->
+    Scope = ?FULL_CONTROL_SCOPE,
     ?CRED_FUN(update_object(BucketName, ObjectName, Properties, Token));
 msg_to_fun(_) ->
     skip.
+
+-spec get_google_spreadsheet(binary(), binary(), access_token()) -> {ok, object()} | {error, term()}.
+get_google_spreadsheet(SpreadsheetId, SheetName, Token) ->
+    Ranges = <<"A1:Z1000">>,
+    get_google_spreadsheet(SpreadsheetId, SheetName, Ranges, Token).
+
+-spec get_google_spreadsheet(binary(), binary(), binary(), access_token()) -> {ok, object()} | {error, term()}.
+get_google_spreadsheet(SpreadsheetId, SheetName, Ranges0, Token) ->
+    ON = hackney_url:urlencode(SpreadsheetId),
+    SpreadsheetId = ON,
+    BaseUrl = <<"https://sheets.googleapis.com/v4/">>,
+    UrlPath = <<"spreadsheets/", ON/binary>>,
+%%    Ranges1 = <<"'", SheetName/binary, "'">>,
+    Ranges1 = <<"'", SheetName/binary, "'!", Ranges0/binary>>,
+    Url = hackney_url:make_url(BaseUrl, UrlPath, [{<<"includeGridData">>, true}, {<<"ranges">>, Ranges1}]),
+    ReqHeaders = add_auth_header(Token, []),
+    {ok, Status, Headers, Client} = hackney:request(get, Url, ReqHeaders),
+    case decode_response(Status, Headers, Client) of
+        {ok, Body} ->
+            {ok, maps:from_list(Body)};
+        R ->
+            R
+    end.
 
 % @doc
 %
@@ -482,7 +523,8 @@ decode_response(409, _Headers, Client) ->
 decode_response(Ok, _Headers, Client) when Ok == 200; Ok == 201 ->
     {ok, Body} = hackney:body(Client),
     try maps:to_list(jsx:decode(Body)) of
-        Results -> {ok, Results}
+        Results ->
+            {ok, Results}
     catch
         Error -> Error
     end;
@@ -498,18 +540,27 @@ decode_response(_Status, _Headers, Client) ->
         Error -> Error
     end.
 
+decode_response_csv(_Status, _Headers, Client) ->
+    {ok, Body} = hackney:body(Client),
+    {ok, Body}.
+%%    try maps:to_list(jsx:decode(Body)) of
+%%        Results -> {ok, Results}
+%%    catch
+%%        Error -> Error
+%%    end.
+
 % @doc
 %
 % Retrieve a read/write authorization token from the remote service, based
 % on the provided credentials, which contains the client email address and
 % the PEM encoded private key.
 %
--spec get_auth_token(credentials()) -> {ok, access_token()} | {error, term()}.
-get_auth_token(use_google_internal_metadata_server) ->
+-spec get_auth_token(credentials(), Scope::binary()) -> {ok, access_token()} | {error, term()}.
+get_auth_token(use_google_internal_metadata_server, _Scope) ->
     %% it assumes that workload identity is properly configured
     {ok, Status, Headers, Client} = hackney:request(get, ?GOOGLE_INTERNAL_AUTH_URL, [{<<"Metadata-Flavor">>, <<"Google">>}]),
     decode_token_response(Status, Headers, Client);
-get_auth_token(Creds) ->
+get_auth_token(Creds, Scope) ->
     Now = seconds_since_epoch(),
     % GCP seems to completely ignore the timeout value and always expires
     % in 3600 seconds anyway. Who knows, maybe someday it will work, but
@@ -517,7 +568,7 @@ get_auth_token(Creds) ->
     Timeout = application:get_env(enenra, auth_timeout, 3600),
     ClaimSet = base64:encode(jsx:encode([
         {<<"iss">>, Creds#credentials.client_email},
-        {<<"scope">>, ?FULL_CONTROL_SCOPE},
+        {<<"scope">>, Scope},
         {<<"aud">>, ?AUD_URL},
         {<<"exp">>, Now + Timeout},
         {<<"iat">>, Now}
